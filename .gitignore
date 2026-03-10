@@ -1,0 +1,7 @@
+venv/
+__pycache__/
+*.pyc
+sec-edgar-filings/
+*.pdf
+peg_rankings.csv
+.DS_Store
