@@ -6,9 +6,52 @@ import subprocess
 from finvizfinance.screener.overview import Overview
 from sec_edgar_downloader import Downloader
 
-st.set_page_config(layout="wide", page_title="Stock Scanner")
+st.set_page_config(layout="wide", page_title="Lynch-Clark Stock Scanner")
 
-st.title("Lynch-Clark Stock Scanner")
+st.title("🔥 Lynch-Clark EPS Torque Scanner")
+st.markdown("**Forward PEG ratio calculated directly from SEC EDGAR filings — no third-party estimates.**")
+
+# ── EPS Torque Results Section ──
+CSV_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "best_setups_database.csv")
+
+if os.path.exists(CSV_PATH):
+    torque_df = pd.read_csv(CSV_PATH)
+    
+    if not torque_df.empty:
+        st.subheader("📊 EPS Torque — Latest Scan Results")
+        
+        scan_date = torque_df["Scan_Date"].iloc[0][:10] if "Scan_Date" in torque_df.columns else "Unknown"
+        total = len(torque_df)
+        with_data = len(torque_df[torque_df["Signal"] != "NO DATA"])
+        buys = len(torque_df[torque_df["Signal"].str.contains("BUY", na=False)])
+        
+        c1, c2, c3, c4 = st.columns(4)
+        c1.metric("Last Scan", scan_date)
+        c2.metric("Tickers Scanned", total)
+        c3.metric("With EPS Data", with_data)
+        c4.metric("BUY Signals", buys)
+        
+        # Signal filter
+        signals = ["ALL"] + torque_df["Signal"].unique().tolist()
+        sel_signal = st.selectbox("Filter by Signal:", signals)
+        
+        display_df = torque_df if sel_signal == "ALL" else torque_df[torque_df["Signal"] == sel_signal]
+        
+        display_cols = [c for c in ["Ticker", "Price", "EPS_Torque", "Forward_PE",
+                        "EPS_Growth_Rate", "Forward_PEG", "Signal", "EPS_Source",
+                        "Raw_Sentence"] if c in display_df.columns]
+        
+        st.dataframe(display_df[display_cols].reset_index(drop=True), use_container_width=True)
+        
+        st.info("💡 Run `python3 batch_scanner.py 50` in your terminal to scan more tickers and refresh this data.")
+    
+    st.divider()
+else:
+    st.warning("No scan results found. Run `python3 batch_scanner.py` first to generate `best_setups_database.csv`.")
+    st.divider()
+
+st.markdown("---")
+st.markdown("### 🔍 Live Finviz Scanner")
 st.markdown("Filter NASDAQ companies by Volume and Market Cap, and download EDGAR files.")
 
 @st.cache_data(ttl=3600)
@@ -77,17 +120,46 @@ def fetch_screener_data(max_mcap_b, max_vol_m, min_pe, max_pe):
             
     df['PE_Raw'] = df['P/E'].apply(parse_pe)
 
-    # Filter based on user input
-    filtered_df = df[
+    # Now augment the data with Forward PE and Forward PEG from yfinance
+    # Since yfinance can be slow, we only fetch for the stocks that already meet Cap/Vol criteria
+    pre_filtered_df = df[
         (df['Mcap_Raw'] <= max_mcap_b * 1e9) & 
-        (df['Vol_Raw'] <= max_vol_m * 1e6) &
-        (df['PE_Raw'] >= min_pe) &
-        (df['PE_Raw'] <= max_pe)
+        (df['Vol_Raw'] <= max_vol_m * 1e6)
+    ].copy()
+    
+    forward_pes = []
+    forward_pegs = []
+    
+    for ticker in pre_filtered_df['Ticker']:
+        try:
+            t_info = yf.Ticker(ticker).info
+            fpe = t_info.get('forwardPE', 0)
+            peg = t_info.get('pegRatio', 0)
+            
+            # Fallback calculated peg
+            if not peg and fpe and t_info.get('earningsGrowth'):
+                growth = t_info.get('earningsGrowth')
+                if growth > 0:
+                    peg = fpe / (growth * 100)
+            
+            forward_pes.append(fpe if fpe else 0)
+            forward_pegs.append(peg if peg else 0)
+        except:
+            forward_pes.append(0)
+            forward_pegs.append(0)
+            
+    pre_filtered_df['Forward P/E'] = forward_pes
+    pre_filtered_df['Forward PEG'] = forward_pegs
+
+    # Filter based on user input for FORWARD PE
+    final_df = pre_filtered_df[
+        (pre_filtered_df['Forward P/E'] >= min_pe) &
+        (pre_filtered_df['Forward P/E'] <= max_pe)
     ]
     
     # Clean up display
-    display_cols = ['Ticker', 'Company', 'Sector', 'Industry', 'Market Cap', 'P/E', 'Price', 'Change', 'Volume']
-    return filtered_df[display_cols]
+    display_cols = ['Ticker', 'Company', 'Sector', 'Market Cap', 'Forward P/E', 'Forward PEG', 'P/E', 'Price', 'Volume']
+    return final_df[display_cols].sort_values('Forward PEG')
 
 st.subheader("1. Screen for Stocks")
 col1, col2, col3, col4 = st.columns(4)
@@ -96,9 +168,9 @@ with col1:
 with col2:
     max_vol = st.number_input("Max Daily Volume (M)", min_value=0.1, max_value=20.0, value=10.0, step=0.1)
 with col3:
-    min_pe = st.number_input("Min P/E (TTM)", min_value=0.01, max_value=50.0, value=0.01, step=0.1)
+    min_pe = st.number_input("Min Forward P/E", min_value=0.01, max_value=50.0, value=0.01, step=0.1)
 with col4:
-    max_pe = st.number_input("Max P/E (TTM)", min_value=0.1, max_value=100.0, value=0.7, step=0.1)
+    max_pe = st.number_input("Max Forward P/E", min_value=0.1, max_value=100.0, value=15.0, step=0.1)
 
 if st.button("Run Scanner"):
     progress_bar = st.progress(0, text="Initializing screener...")
