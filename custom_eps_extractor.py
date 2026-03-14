@@ -125,13 +125,22 @@ try:
                 pass
                 
         if all_numbers:
-            # We boldly assume the highest EPS number mentioned in the first 15 pages is the forward annual/quarterly peak
-            eps_guidance = max(all_numbers)
-            # Find the sentence that contained this max number
-            for s in sentences:
-                if str(eps_guidance) in s:
-                    guidance_sentence = s
-                    break
+            def _period_rank(sentence):
+                s = sentence.lower()
+                if any(k in s for k in ["three months", "third quarter", "second quarter",
+                                          "first quarter", "quarterly"]):
+                    return 0
+                if any(k in s for k in ["six months", "6 months"]):
+                    return 1
+                if any(k in s for k in ["nine months", "9 months"]):
+                    return 2
+                return 3
+
+            combined = list(zip(sentences, all_numbers))
+            best = min(combined, key=lambda x: _period_rank(x[0]))
+            
+            guidance_sentence = best[0]
+            eps_guidance = best[1]
 
         # Calculate custom Forward metrics if we found guidance
         custom_forward_pe = None

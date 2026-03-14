@@ -4,4 +4,9 @@ __pycache__/
 sec-edgar-filings/
 *.pdf
 peg_rankings.csv
+scanner.db
+scanner.log
+screener_run.log
+fmp_results.json
+expanded_screener_results.csv
 .DS_Store
